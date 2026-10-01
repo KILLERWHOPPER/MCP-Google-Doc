@@ -3,6 +3,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { google } from "googleapis";
 import * as fs from "fs";
 import * as path from "path";
+import { fileURLToPath } from "url";
 import * as process from "process";
 import { z } from "zod";
 import { docs_v1, drive_v3 } from "googleapis";
@@ -16,7 +17,9 @@ const SCOPES = [
 ];
 
 // Resolve paths relative to the project root
-const PROJECT_ROOT = path.resolve(path.join(path.dirname(new URL(import.meta.url).pathname), '..'));
+// Use fileURLToPath to correctly handle Windows file:// URLs (avoids C:\C:\... bug)
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const PROJECT_ROOT = path.resolve(__dirname, "..");
 
 // The token path is where we'll store the OAuth credentials
 const TOKEN_PATH = path.join(PROJECT_ROOT, "token.json");
