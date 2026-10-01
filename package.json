@@ -20,7 +20,6 @@
     "author": "",
     "license": "MIT",
     "dependencies": {
-      "@google-cloud/local-auth": "^2.1.0",
       "@modelcontextprotocol/sdk": "^1.4.1",
       "googleapis": "^126.0.1",
       "zod": "^3.22.4"

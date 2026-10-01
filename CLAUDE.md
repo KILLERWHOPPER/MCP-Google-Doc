@@ -11,7 +11,26 @@ npm start            # run the MCP server
 npm run dev          # watch mode — recompiles on change
 ```
 
-Entry point: `build/server.js`. Requires env vars or local `credentials.json` + `token.json` for Google OAuth.
+Entry point: `build/server.js`. Requires `credentials.json` (OAuth client config) + `token.json` (user token).
+
+### Headless Server OAuth Setup
+
+The server uses an out-of-band (OOB) OAuth flow for headless environments:
+
+1. **Generate `credentials.json`**: Create an OAuth 2.0 Client ID at [Google Cloud Console](https://console.cloud.google.com/apis/credentials). Choose "Desktop app" or "Other" type. Download the JSON file.
+
+2. **First-time auth (requires browser)**: Run the server locally (on a machine with a browser):
+   ```bash
+   npm install && npm run build && node build/server.js
+   ```
+   The server will print an authorization URL. Open it in your browser, authorize, and paste the verification code back.
+
+3. **Copy `token.json` to server**:
+   ```bash
+   scp token.json user@your-server:/path/to/MCP-Google-Doc/
+   ```
+
+4. **Server restarts**: No browser needed. The cached `token.json` refresh token is long-lived. If it expires, repeat step 2.
 
 ## Architecture
 

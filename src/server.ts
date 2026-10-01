@@ -1,7 +1,6 @@
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { google } from "googleapis";
-import { authenticate } from "@google-cloud/local-auth";
 import * as fs from "fs";
 import * as path from "path";
 import * as process from "process";
@@ -32,9 +31,18 @@ const server = new McpServer({
 });
 
 /**
- * Load saved credentials if they exist, otherwise trigger the OAuth flow
+ * Load saved credentials if they exist, otherwise trigger the OAuth flow.
+ *
+ * For headless servers (no browser available), uses the out-of-band flow:
+ * 1. Prints an authorization URL and a verification code
+ * 2. User opens the URL in their local browser
+ * 3. User pastes the verification code back into the terminal
+ * 4. Token is saved to token.json
+ *
+ * After the first successful authorization, subsequent server restarts
+ * will use the cached token.json and require no browser interaction.
  */
-async function authorize() {
+async function authorize(): Promise<OAuth2Client> {
   try {
     // Load client secrets from a local file
     console.error("Reading credentials from:", CREDENTIALS_PATH);
@@ -43,43 +51,98 @@ async function authorize() {
     const clientId = keys.installed.client_id;
     const clientSecret = keys.installed.client_secret;
     const redirectUri = keys.installed.redirect_uris[0];
-    
+
     console.error("Using client ID:", clientId);
     console.error("Using redirect URI:", redirectUri);
-    
+
     // Create an OAuth2 client
     const oAuth2Client = new OAuth2Client(clientId, clientSecret, redirectUri);
-    
+
     // Check if we have previously stored a token
     if (fs.existsSync(TOKEN_PATH)) {
       console.error("Found existing token, attempting to use it...");
       const token = JSON.parse(fs.readFileSync(TOKEN_PATH, "utf-8"));
       oAuth2Client.setCredentials(token);
-      return oAuth2Client;
+      // Verify the token is still valid by making a lightweight request
+      try {
+        const drive = google.drive({ version: "v3", auth: oAuth2Client as any });
+        await drive.files.get({ fileId: "root", fields: "name" });
+        console.error("Token is valid, using cached credentials.");
+        return oAuth2Client;
+      } catch (verifyErr) {
+        console.error("Cached token is invalid or expired, re-authorizing...");
+      }
     }
-    
-    // No token found, use the local-auth library to get one
-    console.error("No token found, starting OAuth flow...");
-    const client = await authenticate({
-      scopes: SCOPES,
-      keyfilePath: CREDENTIALS_PATH,
+
+    // No valid token found — use out-of-band (OOB) flow for headless servers
+    console.error("\n=== Google OAuth Authorization Required ===\n");
+    console.error("This server is headless (no browser available).");
+    console.error("Please complete the following steps on your local machine:\n");
+
+    // Generate authorization URL
+    // prompt=consent forces Google to issue a refresh_token (critical for servers)
+    const authUrl = oAuth2Client.generateAuthUrl({
+      access_type: "offline",
+      scope: SCOPES,
+      prompt: "consent",
     });
-    
-    if (client.credentials) {
-      console.error("Authentication successful, saving token...");
-      fs.writeFileSync(TOKEN_PATH, JSON.stringify(client.credentials));
-      console.error("Token saved successfully to:", TOKEN_PATH);
-    } else {
-      console.error("Authentication succeeded but no credentials returned");
-    }
-    
-    return client;
+
+    console.error(`1. Open this URL in your browser (on your local machine):`);
+    console.error(`\n   ${authUrl}\n`);
+    console.error(`2. Sign in with your Google account and click "Allow".`);
+    console.error(`3. Google will display a verification code (e.g., "XYZW-1234").`);
+    console.error(`   Paste it below:\n`);
+
+    // Prompt for verification code from stdin
+    const code = await readVerificationCode();
+
+    console.error("\nExchanging code for token...");
+    const { tokens } = await oAuth2Client.getToken({
+      code: code,
+      redirect_uri: redirectUri,
+    });
+    oAuth2Client.setCredentials(tokens);
+
+    // Save token to file
+    console.error("Authentication successful, saving token...");
+    fs.writeFileSync(TOKEN_PATH, JSON.stringify(tokens, null, 2));
+    console.error("Token saved to:", TOKEN_PATH);
+    console.error("\n=== Authorization complete ===\n");
+
+    return oAuth2Client;
   } catch (err) {
     console.error("Error authorizing with Google:", err);
     if (err.message) console.error("Error message:", err.message);
     if (err.stack) console.error("Stack trace:", err.stack);
     throw err;
   }
+}
+
+/**
+ * Read a verification code from stdin (for headless / OOB flow).
+ */
+function readVerificationCode(): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const stdin = process.stdin;
+    stdin.setEncoding("utf-8");
+
+    // Handle Ctrl+C gracefully
+    const handleSigint = () => {
+      console.error("\nAuthorization cancelled.");
+      process.exit(0);
+    };
+    process.on("SIGINT", handleSigint);
+
+    stdin.once("data", (data) => {
+      process.off("SIGINT", handleSigint);
+      const code = data.toString().trim();
+      if (!code) {
+        reject(new Error("Empty verification code received"));
+      } else {
+        resolve(code);
+      }
+    });
+  });
 }
 
 // Create Docs and Drive API clients
